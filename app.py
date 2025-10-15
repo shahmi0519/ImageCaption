@@ -9,7 +9,7 @@ import pickle
 from PIL import Image
 import os
 
-# --- Paths to your files in Colab (upload them to Colab first) ---
+# --- Paths to files (ensure no spaces in names!) ---
 MODEL_PATH = "final_model.h5"
 TOKENIZER_PATH = "tokenizer.pkl"
 HISTORY_PATH = "train_history.pkl"
@@ -23,15 +23,21 @@ st.markdown("Upload an image to generate an AI-powered descriptive caption!")
 # --- Load caption model ---
 @st.cache_resource
 def load_caption_model():
+    if not os.path.exists(MODEL_PATH):
+        st.error(f"Model file not found at {MODEL_PATH}. Please check your repo.")
+        st.stop()
     return load_model(MODEL_PATH)
 
 # --- Load tokenizer ---
 @st.cache_resource
 def load_tokenizer():
+    if not os.path.exists(TOKENIZER_PATH):
+        st.error(f"Tokenizer file not found at {TOKENIZER_PATH}.")
+        st.stop()
     with open(TOKENIZER_PATH, 'rb') as f:
         return pickle.load(f)
 
-# --- Load feature extractor once ---
+# --- Load feature extractor ---
 @st.cache_resource
 def load_feature_extractor():
     model = tf.keras.applications.InceptionV3(include_top=False, pooling='avg', weights='imagenet')
@@ -46,15 +52,15 @@ def load_history():
     return None
 
 # --- Extract features ---
-def extract_features(img_path, feature_model):
-    img = kimage.load_img(img_path, target_size=(299, 299))
+def extract_features(img, feature_model):
+    img = img.resize((299, 299))
     x = kimage.img_to_array(img)
     x = np.expand_dims(x, axis=0)
     x = preprocess_input(x)
     feature = feature_model.predict(x)
     return feature
 
-# --- Generate caption (greedy search) ---
+# --- Generate caption ---
 def generate_caption(model, tokenizer, photo, max_length):
     in_text = '<start>'
     for _ in range(max_length):
@@ -87,21 +93,15 @@ history = load_history()
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file:
-    temp_path = "/content/temp_image.jpg"
-    with open(temp_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    image = Image.open(temp_path).convert("RGB")
+    image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
     if st.button("🪄 Generate Caption"):
         with st.spinner("Generating caption..."):
-            feature = extract_features(temp_path, feature_model)
+            feature = extract_features(image, feature_model)
             caption = generate_caption(caption_model, tokenizer, feature, MAX_LENGTH)
             st.success("✨ Caption Generated!")
             st.markdown(f"**Generated Caption:** _{caption}_")
-    
-    os.remove(temp_path)
 
 # --- Optional: Show training history ---
 if history:
@@ -114,4 +114,3 @@ if history:
     ax.set_ylabel('Loss')
     ax.legend()
     st.pyplot(fig)
-
