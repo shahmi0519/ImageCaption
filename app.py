@@ -114,3 +114,4 @@ if history:
     ax.set_ylabel('Loss')
     ax.legend()
     st.pyplot(fig)
+
