@@ -9,11 +9,18 @@ import pickle
 from PIL import Image
 import os
 
+
 # --- Paths to files (ensure no spaces in names!) ---
 MODEL_PATH = "final_model.h5"
 TOKENIZER_PATH = "tokenizer.pkl"
 HISTORY_PATH = "train_history.pkl"
 MAX_LENGTH = 34
+
+
+
+st.write("File exists?", os.path.exists(MODEL_PATH))
+st.write("File size:", os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else "N/A")
+
 
 # --- Streamlit page ---
 st.set_page_config(page_title="📸 Image Caption Generator", layout="centered")
@@ -114,4 +121,5 @@ if history:
     ax.set_ylabel('Loss')
     ax.legend()
     st.pyplot(fig)
+
 
