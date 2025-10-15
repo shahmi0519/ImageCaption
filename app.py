@@ -10,9 +10,9 @@ from PIL import Image
 import os
 
 # --- Paths to your files in Colab (upload them to Colab first) ---
-MODEL_PATH = "/content/final_model.h5"
-TOKENIZER_PATH = "/content/tokenizer.pkl"
-HISTORY_PATH = "/content/train_history.pkl"
+MODEL_PATH = "final_model.h5"
+TOKENIZER_PATH = "tokenizer.pkl"
+HISTORY_PATH = "train_history.pkl"
 MAX_LENGTH = 34
 
 # --- Streamlit page ---
@@ -114,3 +114,4 @@ if history:
     ax.set_ylabel('Loss')
     ax.legend()
     st.pyplot(fig)
+
