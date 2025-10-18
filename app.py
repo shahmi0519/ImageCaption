@@ -1,124 +1,157 @@
-# --- Python code starts here ---
-import streamlit as st
-import tensorflow as tf
-from tensorflow.keras.preprocessing import image as kimage
-from tensorflow.keras.applications.inception_v3 import preprocess_input
-from tensorflow.keras.models import load_model
-import numpy as np
-import pickle
-from PIL import Image
 import os
+import io
+import pickle
+from pathlib import Path
+from PIL import Image
+import numpy as np
+import streamlit as st
+from tensorflow.keras.applications.vgg16 import VGG16, preprocess_input
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, LSTM, Embedding, Dense, Add
+from tensorflow.keras.utils import get_custom_objects
 
+# ----------------------
+# CONFIG
+# ----------------------
 
-# --- Paths to files (ensure no spaces in names!) ---
-MODEL_PATH = "final_model.h5"
+MODEL_WEIGHTS_PATH = "best_model2.h5"  # your H5 weights file
 TOKENIZER_PATH = "tokenizer.pkl"
-HISTORY_PATH = "train_history.pkl"
-MAX_LENGTH = 34
+FEATURES_PATH = "features.pkl"
+DEFAULT_MAX_LENGTH = 34  # fallback if tokenizer max length is not set
+EMBED_DIM = 256  # adjust to your model
+LSTM_UNITS = 256  # adjust to your model
 
+# ----------------------
+# HELPERS
+# ----------------------
 
+@st.cache_resource(show_spinner=False)
+def load_feature_extractor():
+    """Return VGG16 up to fc2 (4096-d) for on-the-fly feature extraction."""
+    base = VGG16()
+    feat_extractor = Model(inputs=base.inputs, outputs=base.layers[-2].output)
+    return feat_extractor
 
-st.write("File exists?", os.path.exists(MODEL_PATH))
-st.write("File size:", os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else "N/A")
+@st.cache_data(show_spinner=False)
+def load_tokenizer(path):
+    path = Path(path)
+    if not path.exists():
+        return None
+    with open(path, 'rb') as f:
+        tokenizer = pickle.load(f)
+    return tokenizer
 
-
-# --- Streamlit page ---
-st.set_page_config(page_title="📸 Image Caption Generator", layout="centered")
-st.title("📸 Image Caption Generator (TensorFlow + Flickr8k)")
-st.markdown("Upload an image to generate an AI-powered descriptive caption!")
-
-# --- Load caption model ---
-@st.cache_resource
-def load_caption_model():
-    if not os.path.exists(MODEL_PATH):
-        st.error(f"Model file not found at {MODEL_PATH}. Please check your repo.")
-        st.stop()
-    return load_model(MODEL_PATH)
-
-# --- Load tokenizer ---
-@st.cache_resource
-def load_tokenizer():
-    if not os.path.exists(TOKENIZER_PATH):
-        st.error(f"Tokenizer file not found at {TOKENIZER_PATH}.")
-        st.stop()
-    with open(TOKENIZER_PATH, 'rb') as f:
+@st.cache_data(show_spinner=False)
+def load_features(path):
+    path = Path(path)
+    if not path.exists():
+        return {}
+    with open(path, 'rb') as f:
         return pickle.load(f)
 
-# --- Load feature extractor ---
-@st.cache_resource
-def load_feature_extractor():
-    model = tf.keras.applications.InceptionV3(include_top=False, pooling='avg', weights='imagenet')
+def build_caption_model(vocab_size, max_length):
+    """Rebuild the image captioning model architecture."""
+    # Image feature input
+    inputs1 = Input(shape=(4096,))
+    fe1 = Dense(EMBED_DIM, activation='relu')(inputs1)
+
+    # Sequence input
+    inputs2 = Input(shape=(max_length,))
+    se1 = Embedding(vocab_size, EMBED_DIM, mask_zero=True)(inputs2)
+    se2 = LSTM(LSTM_UNITS)(se1)
+
+    # Merge
+    decoder1 = Add()([fe1, se2])
+    decoder2 = Dense(EMBED_DIM, activation='relu')(decoder1)
+    outputs = Dense(vocab_size, activation='softmax')(decoder2)
+
+    model = Model(inputs=[inputs1, inputs2], outputs=outputs)
     return model
 
-# --- Load training history ---
-@st.cache_resource
-def load_history():
-    if os.path.exists(HISTORY_PATH):
-        with open(HISTORY_PATH, 'rb') as f:
-            return pickle.load(f)
+def extract_features_from_pil(pil_img, feat_extractor):
+    img = pil_img.resize((224,224))
+    arr = img_to_array(img)
+    arr = arr.reshape((1, arr.shape[0], arr.shape[1], arr.shape[2]))
+    arr = preprocess_input(arr)
+    feat = feat_extractor.predict(arr, verbose=0)
+    return feat
+
+def idx_to_word(integer, tokenizer):
+    for word, index in tokenizer.word_index.items():
+        if index == integer:
+            return word
     return None
 
-# --- Extract features ---
-def extract_features(img, feature_model):
-    img = img.resize((299, 299))
-    x = kimage.img_to_array(img)
-    x = np.expand_dims(x, axis=0)
-    x = preprocess_input(x)
-    feature = feature_model.predict(x)
-    return feature
-
-# --- Generate caption ---
-def generate_caption(model, tokenizer, photo, max_length):
-    in_text = '<start>'
-    for _ in range(max_length):
+def predict_caption(model, image_feature, tokenizer, max_length):
+    in_text = 'startseq'
+    for i in range(max_length):
         sequence = tokenizer.texts_to_sequences([in_text])[0]
-        sequence = tf.keras.preprocessing.sequence.pad_sequences([sequence], maxlen=max_length)
-        yhat = model.predict([photo, sequence], verbose=0)
+        sequence = pad_sequences([sequence], maxlen=max_length, padding='post')
+        yhat = model.predict([image_feature, sequence], verbose=0)
         yhat = np.argmax(yhat)
-        if yhat == 0:
-            break
-        word = None
-        for w, index in tokenizer.word_index.items():
-            if index == yhat:
-                word = w
-                break
+        word = idx_to_word(yhat, tokenizer)
         if word is None:
             break
         in_text += ' ' + word
-        if word == '<end>':
+        if word == 'endseq':
             break
-    final = in_text.replace('<start>', '').replace('<end>', '').strip()
-    return final.capitalize()
+    return in_text
 
-# --- Load resources ---
-caption_model = load_caption_model()
-tokenizer = load_tokenizer()
-feature_model = load_feature_extractor()
-history = load_history()
+# ----------------------
+# STREAMLIT APP UI
+# ----------------------
 
-# --- File uploader ---
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+st.set_page_config(page_title='Image Captioning (Flickr8k)', layout='centered')
+st.title('Image Captioning — Flickr8k model')
+st.markdown('Upload an image and the app will generate a caption using the trained model.')
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_column_width=True)
+# Load tokenizer and features
+tokenizer = load_tokenizer(TOKENIZER_PATH)
+if tokenizer is None:
+    st.error("Tokenizer not found. Please place tokenizer.pkl in the app folder.")
+    st.stop()
+vocab_size = len(tokenizer.word_index) + 1
+max_length = getattr(tokenizer, 'max_length', DEFAULT_MAX_LENGTH)
 
-    if st.button("🪄 Generate Caption"):
-        with st.spinner("Generating caption..."):
-            feature = extract_features(image, feature_model)
-            caption = generate_caption(caption_model, tokenizer, feature, MAX_LENGTH)
-            st.success("✨ Caption Generated!")
-            st.markdown(f"**Generated Caption:** _{caption}_")
+features_db = load_features(FEATURES_PATH)
+if features_db:
+    st.success('Precomputed features loaded: %d images' % len(features_db))
 
-# --- Optional: Show training history ---
-if history:
-    import matplotlib.pyplot as plt
-    st.subheader("📈 Training Performance")
-    fig, ax = plt.subplots()
-    ax.plot(history.get('loss', []), label='Training Loss')
-    ax.plot(history.get('val_loss', []), label='Validation Loss')
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss')
-    ax.legend()
-    st.pyplot(fig)
+# Feature extractor
+feat_extractor = load_feature_extractor()
 
+# Build model architecture and load weights
+model = build_caption_model(vocab_size, max_length)
+model.load_weights(MODEL_WEIGHTS_PATH)
+st.success("Captioning model loaded from architecture + weights.")
+
+# Upload image
+uploaded = st.file_uploader('Upload an image (jpg/png)', type=['jpg','jpeg','png'])
+
+if uploaded is not None:
+    try:
+        image = Image.open(io.BytesIO(uploaded.read())).convert('RGB')
+        st.image(image, caption='Uploaded image', use_column_width=True)
+    except Exception as e:
+        st.error(f'Could not read image: {e}')
+        image = None
+
+    if image is not None:
+        with st.spinner('Extracting features and predicting caption...'):
+            feat = extract_features_from_pil(image, feat_extractor)
+            image_feat = feat.reshape((1, -1)) if feat.ndim != 2 else feat
+            caption = predict_caption(model, image_feat, tokenizer, max_length)
+        st.subheader('Predicted caption')
+        st.write(caption)
+        st.success('Done')
+else:
+    st.info('Upload an image to generate a caption.')
+
+# Footer / troubleshooting
+st.markdown('---')
+# st.write('Tips:')
+# st.write('- Place `best_model.h5` and `tokenizer.pkl` in the working directory.')
+# st.write('- If you trained using precomputed features, you can provide `features.pkl` or let the app extract features.')
+st.write('- Loading may take a few seconds due to VGG16 initialization.')
